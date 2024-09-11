@@ -51,7 +51,7 @@ var haderror bool
 
 func main() {
 	args := os.Args
-	db, err := init.NewSession()
+	db, err := basic.NewSession()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Could not connect to database: %v\n", err)
 		os.Exit(74)
