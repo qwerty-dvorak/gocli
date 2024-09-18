@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"io"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -58,14 +58,21 @@ type Admin struct {
 	User                     User
 }
 
+type Flag struct {
+	Base
+	Name	string
+	Value   bool
+}
+
 var haderror bool
 
 func printCommandUsage() {
-	fmt.Printf("%sUsage (to run on text): ./main <filename>%s\n", cyan, reset)
-	fmt.Printf("%sUsage (to run in prompt): ./main%s\n", cyan, reset)
+	fmt.Printf("%sUsage (to run on text): ./main file <filename>%s\n", cyan, reset)
+	fmt.Printf("%sUsage (to run in admin prompt): ./main admin%s\n", cyan, reset)
+	fmt.Printf("%sUsage (to run in flag prompt): ./main flag%s\n", cyan, reset)
 }
 
-func printPromptUsage() {
+func printAdminUsage() {
 	fmt.Printf("%sAvailable commands:%s\n", yellow, reset)
 	fmt.Printf("  Type %s'q'%s to exit\n", green, reset)
 	fmt.Printf("  Type %s'h'%s for help\n", green, reset)
@@ -74,30 +81,60 @@ func printPromptUsage() {
 	fmt.Printf("  Type %s'modify <email>'%s to modify an admin\n", green, reset)
 }
 
+func printFlagUsage(){
+	fmt.Printf("%sAvailable commands:%s\n", yellow, reset)
+	fmt.Printf("  Type %s'q'%s to exit\n", green, reset)
+	fmt.Printf("  Type %s'h'%s for help\n", green, reset)
+	fmt.Printf("  Type %s'see'%s to see all flags\n", green, reset)
+	fmt.Printf("  Type %s'set <flag>'%s to set flag to true\n", green, reset)
+	fmt.Printf("  Type %s'reset <flag>'%s to set flag to false\n", green, reset)
+}
+
 func main() {
 	args := os.Args
-	if len(args) > 2 {
+	if len(args) > 3 {
 		fmt.Printf("%sError: Too many arguments provided%s\n", red, reset)
 		printCommandUsage()
 		os.Exit(64)
-	} else {
+	} else if len(args) ==3 {
 		db, err := basic.NewSession()
 		if err != nil {
 			fmt.Printf("%sCould not connect to database: %v%s\n", red, err, reset)
 			os.Exit(74)
 		}
 		fmt.Printf("%sConnected to database%s\n", magenta, reset)
-		if len(args) == 2 {
-			runFile(args[1], db)
+		runFile(args[2],db);
+	}else if len(args) == 2 {
+		if (args[1] =="admin"){
+			db, err := basic.NewSession()
+			if err != nil {
+				fmt.Printf("%sCould not connect to database: %v%s\n", red, err, reset)
+				os.Exit(74)
+			}
+			fmt.Printf("%sConnected to database%s\n", magenta, reset)
+			printAdminUsage()
+			runPrompt1(db)
+		} else if (args[1]=="flag"){
+			db, err := basic.NewSession()
+			if err != nil {
+				fmt.Printf("%sCould not connect to database: %v%s\n", red, err, reset)
+				os.Exit(74)
+			}
+			fmt.Printf("%sConnected to database%s\n", magenta, reset)
+			printFlagUsage()
+			runPrompt2(db)
 		} else {
-			fmt.Printf("%sRunning in prompt mode%s\n", cyan, reset)
-			printPromptUsage()
-			runPrompt(db)
+			fmt.Printf("%sWrong argument%s\n", red, reset)
+			printCommandUsage()
 		}
+	} else {
+		fmt.Printf("%sWrong argument%s\n", red, reset)
+		printCommandUsage()
 	}
 }
 
-func runPrompt(db *sql.DB) {
+
+func runPrompt1(db *sql.DB) {
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		fmt.Printf("%s>%s ", blue, reset)
@@ -111,10 +148,34 @@ func runPrompt(db *sql.DB) {
 			break
 		}
 		if line == "h" || line == "help" {
-			printPromptUsage()
+			printAdminUsage()
 			continue
 		}
-		run(line, db)
+		run1(line, db)
+		if haderror {
+			haderror = false
+		}
+	}
+}
+
+func runPrompt2(db *sql.DB) {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Printf("%s>%s ", blue, reset)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println()
+			break
+		}
+		line = strings.TrimSpace(line)
+		if line == "exit" || line == "quit" || line == "q" {
+			break
+		}
+		if line == "h" || line == "help" {
+			printFlagUsage()
+			continue
+		}
+		run2(line, db)
 		if haderror {
 			haderror = false
 		}
@@ -122,7 +183,24 @@ func runPrompt(db *sql.DB) {
 }
 
 func runFile(filename string, db *sql.DB) {
-	fmt.Printf("%sRunning file %s%s\n", cyan, filename, reset)
+	re := regexp.MustCompile(`^(.*?)(\.[^.]*$|$)`)
+    matches := re.FindStringSubmatch(filename)
+    if len(matches) < 3 {
+        fmt.Printf("%sInvalid filename format: %s%s\n", red, filename, reset)
+        os.Exit(64)
+    }
+    name := matches[1]
+    extension := matches[2]
+	commandRe := regexp.MustCompile(`^(.*?)(_.*)?$`)
+    commandMatches := commandRe.FindStringSubmatch(name)
+    if len(commandMatches) < 2 {
+        fmt.Printf("%sInvalid command format in filename: %s%s\n", red, filename, reset)
+        os.Exit(64)
+    }
+    commandName := commandMatches[1]
+	commandObject := commandMatches[2]
+	fmt.Printf("%sRunning command %s (name: %s, extension: %s)%s\n", cyan, commandName, name, extension, reset)
+    //fmt.Printf("%sRunning file %s (name: %s, extension: %s)%s\n", cyan, filename, name, extension, reset)
 	file, err := os.Open(filename)
 	if err != nil {
 		fmt.Printf("%sCould not open file %s%s\n", red, filename, reset)
@@ -130,19 +208,43 @@ func runFile(filename string, db *sql.DB) {
 	}
 	defer file.Close()
 
-	source, err := io.ReadAll(file)
-	if err != nil {
-		fmt.Printf("%sCould not read file %s%s\n", red, filename, reset)
-		os.Exit(74)
-	}
 
-	run(string(source), db)
-	if !haderror {
-		os.Exit(65)
+	scanner := bufio.NewScanner(file)
+	if (commandObject == "_admin"){
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			line =commandName + " " + line
+			fmt.Printf("%s>%s %s\n", blue, reset, line)
+			run1(line, db)
+			if haderror {
+				haderror = false
+			}
+		}
+	}else if (commandObject == "_flag"){
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			line =commandName + " " + line
+			fmt.Printf("%s>%s %s\n", blue, reset, line)
+			run2(line, db)
+			if haderror {
+				haderror = false
+			}
+		}
+	} else {
+		fmt.Printf("%sInvalid command object in filename: %s%s\n", red, filename, reset)
+		os.Exit(64)
 	}
 }
 
-func run(source string, db *sql.DB) {
+
+
+func run1(source string, db *sql.DB) {
 	words := strings.Fields(source)
 	if len(words) == 0 {
 		fmt.Printf("%sError: empty command%s\n", red, reset)
@@ -196,7 +298,7 @@ func run(source string, db *sql.DB) {
 		}
 	default:
 		fmt.Printf("%sError: unknown command %s%s\n", red, firstWord, reset)
-		printPromptUsage()
+		printAdminUsage()
 		haderror = true
 	}
 }
@@ -301,10 +403,30 @@ func AddAdmin(email string, db *sql.DB) error {
 	return nil
 }
 
+func GetAdminId(userID string, db *sql.DB) (string,error) {
+	var adminID string
+	err := db.QueryRow(`SELECT id FROM admins WHERE user_id = $1`, userID).Scan(&adminID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return adminID, errors.New("Admin not found")
+		}
+		return adminID, err
+	}
+	return adminID, nil
+}
+
 func DeleteAdmin(email string, db *sql.DB) error {
 	user, err := CheckUser(email, db)
 	if err != nil {
 		return err
+	}
+	admin, err := GetAdminId(user.ID, db)
+	if err != nil {
+		return err
+	}
+	_, er := db.Exec("DELETE FROM qr_data where admin_id = $1", admin)
+	if er != nil {
+		return er
 	}
 	result, err := db.Exec("DELETE FROM admins WHERE user_id = $1", user.ID)
 	if err != nil {
@@ -411,5 +533,131 @@ func ModifyAdmin(email string, db *sql.DB) error {
 		return err
 	}
 	printAdminDetails(*user, existingAdmin)
+	return nil
+}
+
+func printFlagDetails(db *sql.DB) {
+	headers := []string{"Flag", "Value"}
+	var flags []Flag
+	rows, err := db.Query("SELECT name, value FROM flags")
+	if err != nil {
+		fmt.Printf("%sError: %v%s\n", red, err, reset)
+		haderror = true
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var flag Flag
+		err = rows.Scan(&flag.Name, &flag.Value)
+		if err != nil {
+			fmt.Printf("%sError: %v%s\n", red, err, reset)
+			haderror = true
+			return
+		}
+		flags = append(flags, flag)
+	}
+	detailWidth := len(headers[0])
+	valueWidth := len(headers[1])
+	for _, row := range flags {
+		if len(row.Name) > detailWidth {
+			detailWidth = len(row.Name)
+		}
+		if len(fmt.Sprintf("%t", row.Value)) > valueWidth {
+			valueWidth = len(fmt.Sprintf("%t", row.Value))
+		}
+	}
+
+	fmt.Printf("%sDetails of the flags are as follows:%s\n", cyan, reset)
+	fmt.Printf("+-%s-+-%s-+\n", strings.Repeat("-", detailWidth), strings.Repeat("-", valueWidth))
+	printTableRow(detailWidth, valueWidth, headers[0], headers[1], magenta+bold)
+	for _, row := range flags {
+		printTableRow(detailWidth, valueWidth, row.Name, fmt.Sprintf("%t", row.Value), "")
+	}
+}
+
+func run2(source string, db *sql.DB) {
+	words := strings.Fields(source)
+	if len(words) == 0 {
+		fmt.Printf("%sError: empty command%s\n", red, reset)
+		haderror = true
+		return
+	}
+
+	firstWord := words[0]
+	switch firstWord {
+	case "see":
+		printFlagDetails(db)
+	case "set":
+		if len(words) < 2 {
+			fmt.Printf("%sError: missing flag name%s\n", red, reset)
+			haderror = true
+			return
+		}
+		flag := words[1]
+		err := SetFlag(flag, db)
+		if err != nil {
+			fmt.Printf("%sError setting flag %v%s\n", red, err, reset)
+			haderror = true
+		} else {
+			fmt.Printf("%sFlag set successfully%s\n", green, reset)
+		}
+	case "reset":
+		if len(words) < 2 {
+			fmt.Printf("%sError: missing flag name%s\n", red, reset)
+			haderror = true
+			return
+		}
+		flag := words[1]
+		err := ResetFlag(flag, db)
+		if err != nil {
+			fmt.Printf("%sError resetting flag %v%s\n", red, err, reset)
+			haderror = true
+		} else {
+			fmt.Printf("%sFlag reset successfully%s\n", green, reset)
+		}
+	default:
+		fmt.Printf("%sError: unknown command %s%s\n", red, firstWord, reset)
+		printFlagUsage()
+		haderror = true
+	}
+}
+
+func SetFlag(flag string, db *sql.DB) error {
+	var existingFlag Flag
+	err := db.QueryRow(`SELECT name, value FROM flags WHERE name = $1`, flag).
+		Scan(&existingFlag.Name, &existingFlag.Value)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return errors.New("flag not found")
+		}
+		return err
+	}
+
+	_, err = db.Exec(`
+		UPDATE flags SET value = $1 WHERE name = $2
+	`, true, flag)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func ResetFlag(flag string, db *sql.DB) error {
+	var existingFlag Flag
+	err := db.QueryRow(`SELECT name, value FROM flags WHERE name = $1`, flag).
+		Scan(&existingFlag.Name, &existingFlag.Value)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return errors.New("flag not found")
+		}
+		return err
+	}
+
+	_, err = db.Exec(`
+		UPDATE flags SET value = $1 WHERE name = $2
+	`, false, flag)
+	if err != nil {
+		return err
+	}
 	return nil
 }
