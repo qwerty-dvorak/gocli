@@ -70,6 +70,7 @@ func printCommandUsage() {
 	fmt.Printf("%sUsage (to run on text): ./main file <filename>%s\n", cyan, reset)
 	fmt.Printf("%sUsage (to run in admin prompt): ./main admin%s\n", cyan, reset)
 	fmt.Printf("%sUsage (to run in flag prompt): ./main flag%s\n", cyan, reset)
+	fmt.Printf("%sUsage (to run in whitelist prompt): ./main whitelist%s\n", cyan, reset)
 }
 
 func printAdminUsage() {
@@ -88,6 +89,13 @@ func printFlagUsage(){
 	fmt.Printf("  Type %s'see'%s to see all flags\n", green, reset)
 	fmt.Printf("  Type %s'set <flag>'%s to set flag to true\n", green, reset)
 	fmt.Printf("  Type %s'reset <flag>'%s to set flag to false\n", green, reset)
+}
+
+func printWhitelist(){
+	fmt.Printf("%sAvailable commands:%s\n", yellow, reset)
+	fmt.Printf("  Type %s'q'%s to exit\n", green, reset)
+	fmt.Printf("  Type %s'h'%s for help\n", green, reset)
+	fmt.Printf("  Type %s'add'%s to seed csv\n", green, reset)
 }
 
 func main() {
@@ -123,6 +131,15 @@ func main() {
 			fmt.Printf("%sConnected to database%s\n", magenta, reset)
 			printFlagUsage()
 			runPrompt2(db)
+		} else if (args[1]=="whitelist"){
+			db, err := basic.NewSession()
+			if err != nil {
+				fmt.Printf("%sCould not connect to database: %v%s\n", red, err, reset)
+				os.Exit(74)
+			}
+			fmt.Printf("%sConnected to database%s\n", magenta, reset)
+			printWhitelist()
+			runPrompt3(db)
 		} else {
 			fmt.Printf("%sWrong argument%s\n", red, reset)
 			printCommandUsage()
@@ -176,6 +193,30 @@ func runPrompt2(db *sql.DB) {
 			continue
 		}
 		run2(line, db)
+		if haderror {
+			haderror = false
+		}
+	}
+}
+
+func runPrompt3(db *sql.DB) {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Printf("%s>%s ", blue, reset)
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println()
+			break
+		}
+		line = strings.TrimSpace(line)
+		if line == "exit" || line == "quit" || line == "q" {
+			break
+		}
+		if line == "h" || line == "help" {
+			printWhitelist()
+			continue
+		}
+		run3(line, db)
 		if haderror {
 			haderror = false
 		}
@@ -660,4 +701,93 @@ func ResetFlag(flag string, db *sql.DB) error {
 		return err
 	}
 	return nil
+}
+
+func run3(source string, db *sql.DB) {
+	words := strings.Fields(source)
+	if len(words) == 0 {
+		fmt.Printf("%sError: empty command%s\n", red, reset)
+		haderror = true
+		return
+	}
+
+	firstWord := words[0]
+	switch firstWord {
+	case "add":
+		err := AddWhitelist(db)
+		if err != nil {
+			fmt.Printf("%sError adding whitelist: %v%s\n", red, err, reset)
+			haderror = true
+		} else {
+			fmt.Printf("%sWhitelist added successfully%s\n", green, reset)
+		}
+	default:
+		fmt.Printf("%sError: unknown command %s%s\n", red, firstWord, reset)
+		printWhitelist()
+		haderror = true
+	}
+}
+
+func AddWhitelist(db *sql.DB) error {
+    file, err := os.Open("whitelist.csv")
+    if err != nil {
+        fmt.Printf("%sCould not open file whitelist.csv%s\n", red, reset)
+        return err
+    }
+
+    defer file.Close()
+    scanner := bufio.NewScanner(file)
+
+    // Skip the first header line
+    if scanner.Scan() {
+        header := scanner.Text()
+        fmt.Printf("%sSkipping header: %s%s\n", cyan, header, reset)
+    }
+
+    for scanner.Scan() {
+        line := scanner.Text()
+        if strings.TrimSpace(line) == "" {
+            continue
+        }
+        words := strings.Split(line, ",")
+        if len(words) < 3 {
+            fmt.Printf("%sError: invalid format in whitelist.csv%s\n", red, reset)
+            return errors.New("invalid format")
+        }
+
+        name := words[0]
+        email := words[2]
+
+		var existingUser User
+		err := db.QueryRow(`SELECT id, email, name FROM whitelists WHERE email = $1`, email).
+			Scan(&existingUser.ID, &existingUser.Email, &existingUser.Name)
+		if err != nil {
+			if err != sql.ErrNoRows {
+				return err
+			}
+		}
+
+		if existingUser.Email == email {
+			fmt.Printf("%sUser already exists in whitelist: %s%s\n", yellow, email, reset)
+			return nil
+		}
+
+		existingUser.Email = email
+		existingUser.Name = name
+		id := uuid.New().String()
+
+		_, err = db.Exec(`INSERT INTO whitelists (id, name, email) VALUES ($1, $2, $3)`, id, name, email)
+		if err != nil {
+			fmt.Printf("%sError inserting into whitelist: %v%s\n", red, err, reset)
+			return err
+		}
+		
+        fmt.Printf("%sProcessing: Name=%s, Email=%s%s\n", green, name, email, reset)
+    }
+
+    if err := scanner.Err(); err != nil {
+        fmt.Printf("%sError reading file: %v%s\n", red, err, reset)
+        return err
+    }
+    return nil
 }
