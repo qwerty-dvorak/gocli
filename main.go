@@ -16,6 +16,9 @@ import (
 	"github.com/qwerty-dvorak/gocli/basic"
 )
 
+var ErrUserNotFound = errors.New("user not found")
+var ErrScanRow = errors.New("error scanning row")
+
 const (
 	reset  = "\033[0m"
 	red    = "\033[31m"
@@ -758,29 +761,23 @@ func AddWhitelist(db *sql.DB) error {
         name := words[0]
         email := words[2]
 
-		var existingUser User
-		err := db.QueryRow(`SELECT id, email, name FROM whitelists WHERE email = $1`, email).
-			Scan(&existingUser.ID, &existingUser.Email, &existingUser.Name)
-		if err != nil {
-			if err != sql.ErrNoRows {
+		user,_ := CheckUser(email, db)
+		id := uuid.New().String()
+		fmt.Println(user)
+		if user == nil {
+			fmt.Printf("%sUser not found: %s%s\n", red, email, reset)
+			_, err = db.Exec(`INSERT INTO whitelists (id, name, email) VALUES ($1, $2, $3)`, id, name, email)
+			if err != nil {
+				fmt.Printf("%sError inserting into whitelist: %v%s\n", red, err, reset)
+			}
+		} else {
+			_, err = db.Exec(`INSERT INTO whitelists (id, name, email,user_id) VALUES ($1, $2, $3, $4)`, id, name, email, user.ID)
+			if err != nil {
+				fmt.Printf("%sError inserting into whitelist: %v%s\n", red, err, reset)
 				return err
 			}
 		}
 
-		if existingUser.Email == email {
-			fmt.Printf("%sUser already exists in whitelist: %s%s\n", yellow, email, reset)
-			return nil
-		}
-
-		existingUser.Email = email
-		existingUser.Name = name
-		id := uuid.New().String()
-
-		_, err = db.Exec(`INSERT INTO whitelists (id, name, email) VALUES ($1, $2, $3)`, id, name, email)
-		if err != nil {
-			fmt.Printf("%sError inserting into whitelist: %v%s\n", red, err, reset)
-			return err
-		}
 		
         fmt.Printf("%sProcessing: Name=%s, Email=%s%s\n", green, name, email, reset)
     }
